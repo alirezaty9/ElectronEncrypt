@@ -1,0 +1,127 @@
+{
+  "name": "electron-encrypt",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Secure Image Encryption Tool with Hardware Token",
+  "author": {
+    "name": "Alireza",
+    "email": "alirezaabadi2016@gmail.com"
+  },
+  "homepage": "https://github.com/alirezaabadi2016",
+  "type": "module",
+  "main": "main.js",
+  "build": {
+    "appId": "com.alireza.electronencrypt",
+    "productName": "ElectronEncrypt",
+    "executableName": "electron-encrypt",
+  
+
+  "files": [
+    "dist",
+    "main.js",
+    "preload.js",
+    "package.json",
+    "assets/icons/**/*",
+    "!node_modules/.cache"
+  ],
+  "directories": {
+    "buildResources": "assets"
+  },
+  
+  "extraResources": [
+    {
+      "from": "Token/lib",
+      "to": "lib"
+    },
+    {
+      "from": "./drivers/ePass3003-English-withX64-latest.exe",
+      "to": "driver-installer.exe"
+    },
+    {
+      "from": "./drivers/ePass3003-Linux-latest.tar.gz",
+      "to": "driver-installer.tar.gz"
+    }
+  ],
+  
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [ "x64" ]
+      },
+      {
+        "target": "portable", 
+        "arch": [ "x64" ]
+      }
+    ],
+    "icon": "assets/icons/icon.png",
+    "requestedExecutionLevel": "asInvoker"
+  },
+  "linux": {
+    "executableArgs": [ "--no-sandbox" ],
+    "target": [
+      {
+        "target": "deb",
+        "arch": [ "x64" ]
+      }
+    ],
+    "icon": "assets/icons/icon.png",
+    "category": "Graphics",
+    "desktop": {
+      "Name": "ElectronEncrypt",
+      "GenericName": "Image Encryption",
+      "Comment": "Secure image encryption with hardware token",
+      "Categories": "Security;Utility;",
+      "Keywords": "encryption;security;image;token;privacy;"
+    }
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "ElectronEncrypt",
+    "installerIcon": "assets/icons/icon.ico",
+    "uninstallerIcon": "assets/icons/icon.ico"
+  }
+},
+
+  "scripts": {
+    "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron . --no-sandbox --disable-gpu\"",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "electron": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron-dev": "NODE_ENV=development concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron-build": "npm run build && electron-builder",
+    "dist": "npm run build && electron-builder",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "dist:win": "npm run build && electron-builder --win"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.1.11",
+    "graphene-pk11": "^2.3.6",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.6.3",
+    "tailwindcss": "^4.1.11",
+    "usb": "^2.16.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.1",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "concurrently": "^9.2.0",
+    "electron": "^37.2.1",
+    "electron-builder": "^24.13.3",
+    "eslint": "^9.30.1",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20",
+    "globals": "^16.3.0",
+    "vite": "^7.0.4",
+    "wait-on": "^8.0.3"
+  }
+}

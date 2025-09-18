@@ -1069,34 +1069,315 @@ ipcMain.handle('save-decrypted-image', async (event, { data, name, outputDirecto
 // SECTION 5.3: IMAGE ENCRYPTION/DECRYPTION HANDLERS
 // ====================================================================
 
-// Placeholder handlers - these should be implemented with proper encryption service
+// Image encryption handler
 ipcMain.handle('encrypt-image', async (event, imagePath, outputDirectory) => {
-  return {
-    success: false,
-    error: 'Encryption service not implemented yet'
-  };
+  let session = null;
+  let mod = null;
+  
+  try {
+    console.log('🔐 شروع رمزنگاری فایل:', imagePath);
+    console.log('📁 پوشه خروجی:', outputDirectory);
+    
+    // Check if hardware token is connected
+    const hasHardware = hardwareTokenManager.hasAnyAllowedTokenConnected();
+    console.log('🔌 وضعیت اتصال توکن:', hasHardware);
+    if (!hasHardware) {
+      return {
+        success: false,
+        error: 'هیچ توکن سخت‌افزاری مجاز متصل نیست'
+      };
+    }
+
+    if (!graphene) {
+      console.log('❌ Graphene library not available');
+      return {
+        success: false,
+        error: 'PKCS#11 library not available'
+      };
+    }
+    console.log('✅ Graphene library available');
+
+    console.log('🔧 Initializing token manager...');
+    await tokenManager.initialize();
+    console.log('📋 Loading PKCS#11 module...');
+    mod = graphene.Module.load(tokenManager.availableDriverPath, "ShuttlePKCS11");
+    mod.initialize();
+    
+    const slot = mod.getSlots(true).items(0);
+    console.log('🎯 Opening session on slot:', slot.slotDescription);
+    session = slot.open(graphene.SessionFlag.SERIAL_SESSION);
+    
+    // Find public key for encryption
+    console.log('🔍 جستجوی کلید عمومی با برچسب:', CONFIG.KEY_LABEL);
+    const publicKeyHandle = session.find({
+      class: graphene.ObjectClass.PUBLIC_KEY,
+      label: CONFIG.KEY_LABEL,
+    }).items(0);
+    
+    if (!publicKeyHandle) {
+      console.log('❌ کلید عمومی یافت نشد');
+      return {
+        success: false,
+        error: `کلید عمومی با برچسب "${CONFIG.KEY_LABEL}" یافت نشد`
+      };
+    }
+    console.log('✅ کلید عمومی یافت شد');
+
+    // Read image file
+    console.log('📖 خواندن فایل تصویر...');
+    const imageData = await fs.readFile(imagePath);
+    console.log('📊 اندازه فایل:', imageData.length, 'bytes');
+    
+    // Create output path
+    const fileName = path.basename(imagePath);
+    const encryptedFileName = fileName + '.enc';
+    const outputPath = outputDirectory 
+      ? path.join(outputDirectory, encryptedFileName)
+      : path.join(path.dirname(imagePath), encryptedFileName);
+    console.log('💾 مسیر فایل خروجی:', outputPath);
+
+    // Create metadata
+    const metadata = {
+      originalPath: imagePath,
+      originalName: fileName,
+      originalSize: imageData.length,
+      encryptedAt: new Date().toISOString(),
+      algorithm: 'AES-256-GCM',
+      version: '1.0'
+    };
+
+    // Generate AES key and IV
+    console.log('🔑 تولید کلید AES و IV...');
+    const aesKey = randomBytes(32); // 256-bit key
+    const iv = randomBytes(16);     // 128-bit IV
+    console.log('✅ کلید AES و IV تولید شد');
+
+    // Encrypt image data with AES
+    console.log('🔐 رمزنگاری داده‌های تصویر با AES...');
+    const crypto = await import('crypto');
+    const cipher = crypto.createCipheriv('aes-256-gcm', aesKey, iv);
+    cipher.setAAD(Buffer.from(JSON.stringify(metadata)));
+    
+    let encrypted = cipher.update(imageData);
+    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    const authTag = cipher.getAuthTag();
+    console.log('✅ رمزنگاری AES کامل شد، اندازه:', encrypted.length, 'bytes');
+
+    // Encrypt AES key with RSA public key
+    console.log('🔐 رمزنگاری کلید AES با RSA...');
+    console.log('🔍 نوع aesKey:', typeof aesKey, 'constructor:', aesKey.constructor.name);
+    
+    // Make sure aesKey is a Buffer
+    const aesKeyBuffer = Buffer.isBuffer(aesKey) ? aesKey : Buffer.from(aesKey);
+    console.log('🔧 تبدیل به Buffer، اندازه:', aesKeyBuffer.length);
+    
+    // Use Node.js crypto for RSA encryption with the token's public key
+    console.log('🔧 استفاده از Node.js crypto برای RSA...');
+    
+    // Get the public key in PEM format
+    const publicKeyPEM = await tokenManager.getTokenPublicKeyPEM();
+    console.log('✅ کلید عمومی PEM دریافت شد');
+    
+    // Encrypt AES key with RSA using Node.js crypto
+    const rsaEncrypted = crypto.publicEncrypt({
+      key: publicKeyPEM,
+      padding: crypto.constants.RSA_PKCS1_PADDING
+    }, aesKeyBuffer);
+    
+    console.log('✅ رمزنگاری RSA کامل شد، اندازه:', rsaEncrypted.length);
+
+    // Create final encrypted file structure
+    const encryptedFile = {
+      version: '1.0',
+      metadata: metadata,
+      encryptedKey: rsaEncrypted.toString('base64'),
+      iv: iv.toString('base64'),
+      authTag: authTag.toString('base64'),
+      data: encrypted.toString('base64')
+    };
+
+    // Write encrypted file
+    console.log('💾 نوشتن فایل رمزنگاری شده...');
+    await fs.writeFile(outputPath, JSON.stringify(encryptedFile, null, 2));
+    console.log('✅ فایل رمزنگاری شده ذخیره شد:', outputPath);
+
+    return {
+      success: true,
+      outputPath: outputPath,
+      metadata: metadata
+    };
+
+  } catch (error) {
+    console.error('❌ خطا در رمزنگاری:', error);
+    console.error('Stack trace:', error.stack);
+    return {
+      success: false,
+      error: error.message
+    };
+  } finally {
+    console.log('🧹 بستن منابع...');
+    if (session) {
+      session.close();
+      console.log('✅ Session بسته شد');
+    }
+    if (mod) {
+      mod.finalize();
+      console.log('✅ Module بسته شد');
+    }
+  }
 });
 
+// Image decryption handler
 ipcMain.handle('decrypt-image', async (event, encryptedPath) => {
-  return {
-    success: false,
-    error: 'Decryption service not implemented yet'
-  };
+  let session = null;
+  let mod = null;
+  
+  try {
+    // Check if hardware token is connected
+    const hasHardware = hardwareTokenManager.hasAnyAllowedTokenConnected();
+    if (!hasHardware) {
+      return {
+        success: false,
+        error: 'هیچ توکن سخت‌افزاری مجاز متصل نیست'
+      };
+    }
+
+    if (!graphene) {
+      return {
+        success: false,
+        error: 'PKCS#11 library not available'
+      };
+    }
+
+    // Read encrypted file
+    const encryptedFileContent = await fs.readFile(encryptedPath, 'utf8');
+    const encryptedFile = JSON.parse(encryptedFileContent);
+
+    await tokenManager.initialize();
+    mod = graphene.Module.load(tokenManager.availableDriverPath, "ShuttlePKCS11");
+    mod.initialize();
+    
+    const slot = mod.getSlots(true).items(0);
+    session = slot.open(
+      graphene.SessionFlag.RW_SESSION | graphene.SessionFlag.SERIAL_SESSION
+    );
+    
+    // Login with PIN
+    const pin = CONFIG.DEFAULT_PIN;
+    session.login(pin);
+    
+    // Find private key for decryption
+    const privateKeyHandle = await tokenManager.findPrivateKeyByLabel(
+      session,
+      CONFIG.KEY_LABEL
+    );
+
+    // Decrypt AES key with RSA private key
+    const encryptedKeyBuffer = Buffer.from(encryptedFile.encryptedKey, 'base64');
+    console.log('🔍 اندازه کلید رمزنگاری شده:', encryptedKeyBuffer.length);
+    
+    // Use token for RSA decryption
+    console.log('🔧 استفاده از توکن برای رمزگشایی RSA...');
+    const rsaDecipher = session.createDecipher("RSA_PKCS", privateKeyHandle);
+    const decryptedAesKey = rsaDecipher.once(encryptedKeyBuffer);
+    
+    // Make sure it's a Buffer
+    const aesKey = Buffer.isBuffer(decryptedAesKey) ? decryptedAesKey : Buffer.from(decryptedAesKey);
+    console.log('🔧 کلید AES رمزگشایی شد، اندازه:', aesKey.length);
+
+    // Decrypt image data with AES
+    const crypto = await import('crypto');
+    const iv = Buffer.from(encryptedFile.iv, 'base64');
+    const authTag = Buffer.from(encryptedFile.authTag, 'base64');
+    const encryptedData = Buffer.from(encryptedFile.data, 'base64');
+
+    const decipher = crypto.createDecipheriv('aes-256-gcm', aesKey, iv);
+    decipher.setAuthTag(authTag);
+    decipher.setAAD(Buffer.from(JSON.stringify(encryptedFile.metadata)));
+
+    let decrypted = decipher.update(encryptedData);
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+    session.logout();
+
+    return {
+      success: true,
+      data: decrypted.toString('base64'),
+      metadata: encryptedFile.metadata
+    };
+
+  } catch (error) {
+    console.error('Decryption error:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  } finally {
+    if (session) {
+      try {
+        session.logout();
+        session.close();
+      } catch (e) {}
+    }
+    if (mod) {
+      try {
+        mod.finalize();
+      } catch (e) {}
+    }
+  }
 });
 
+// Check if file is encrypted
 ipcMain.handle('is-encrypted-file', async (event, filePath) => {
-  return {
-    success: false,
-    isEncrypted: false,
-    error: 'Encryption check service not implemented yet'
-  };
+  try {
+    // Check file extension
+    if (!filePath.endsWith('.enc')) {
+      return {
+        success: true,
+        isEncrypted: false
+      };
+    }
+
+    // Try to read and parse as encrypted file
+    const fileContent = await fs.readFile(filePath, 'utf8');
+    const parsedFile = JSON.parse(fileContent);
+    
+    // Check for required encrypted file structure
+    const hasRequiredFields = parsedFile.version && 
+                             parsedFile.metadata && 
+                             parsedFile.encryptedKey && 
+                             parsedFile.iv && 
+                             parsedFile.authTag && 
+                             parsedFile.data;
+
+    return {
+      success: true,
+      isEncrypted: hasRequiredFields
+    };
+  } catch (error) {
+    return {
+      success: true,
+      isEncrypted: false
+    };
+  }
 });
 
+// Get encrypted file metadata
 ipcMain.handle('get-encrypted-file-metadata', async (event, filePath) => {
-  return {
-    success: false,
-    error: 'Metadata service not implemented yet'
-  };
+  try {
+    const fileContent = await fs.readFile(filePath, 'utf8');
+    const encryptedFile = JSON.parse(fileContent);
+    
+    return {
+      success: true,
+      metadata: encryptedFile.metadata || {}
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
 });
 
 // Get images from folder

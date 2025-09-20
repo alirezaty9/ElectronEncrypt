@@ -1267,7 +1267,7 @@ ipcMain.handle('decrypt-image', async (event, encryptedPath) => {
     session.login(pin);
     
     // Find private key for decryption
-    const privateKeyHandle = await tokenManager.findPrivateKeyByLabel(
+    let privateKeyHandle = await tokenManager.findPrivateKeyByLabel(
       session,
       CONFIG.KEY_LABEL
     );
@@ -1276,14 +1276,102 @@ ipcMain.handle('decrypt-image', async (event, encryptedPath) => {
     const encryptedKeyBuffer = Buffer.from(encryptedFile.encryptedKey, 'base64');
     console.log('🔍 اندازه کلید رمزنگاری شده:', encryptedKeyBuffer.length);
     
-    // Use token for RSA decryption
-    console.log('🔧 استفاده از توکن برای رمزگشایی RSA...');
-    const rsaDecipher = session.createDecipher("RSA_PKCS", privateKeyHandle);
-    const decryptedAesKey = rsaDecipher.once(encryptedKeyBuffer);
+    // Get private key from token for decryption
+    console.log('🔧 دریافت کلید خصوصی از توکن...');
     
-    // Make sure it's a Buffer
-    const aesKey = Buffer.isBuffer(decryptedAesKey) ? decryptedAesKey : Buffer.from(decryptedAesKey);
-    console.log('🔧 کلید AES رمزگشایی شد، اندازه:', aesKey.length);
+    // Simple and reliable decryption approach
+    let aesKey;
+    try {
+      console.log('🔧 رمزگشایی RSA با استفاده از Node.js crypto...');
+      
+      // Get the token's private key in a format we can use with Node.js crypto
+      // Since we can't extract the private key directly, we'll use the token for all operations
+      
+      // Alternative: Use createDecipher with Buffer directly
+      
+      // Try direct PKCS#11 decryption with proper buffer handling
+      console.log('🔧 تلاش مستقیم PKCS#11...');
+      
+      // Ensure no active operations on session before creating decipher
+      try {
+        // Try to cancel any active operations if they exist
+        session.cancelFunction();
+      } catch (cancelError) {
+        // Ignore errors if no operation is active
+      }
+      
+      // Close and reopen session to ensure clean state
+      try {
+        session.logout();
+        session.close();
+      } catch (e) {
+        // Ignore errors
+      }
+      
+      // Reopen session for decryption
+      session = slot.open(
+        graphene.SessionFlag.RW_SESSION | graphene.SessionFlag.SERIAL_SESSION
+      );
+      
+      // Login again
+      session.login(CONFIG.DEFAULT_PIN);
+      
+      // Get private key handle again
+      privateKeyHandle = await tokenManager.findPrivateKeyByLabel(
+        session,
+        CONFIG.KEY_LABEL
+      );
+      
+      const decipher = session.createDecipher({
+        name: "RSA_PKCS",
+        params: null
+      }, privateKeyHandle);
+      
+      // Make sure the buffer is in the right format
+      console.log('🔍 Buffer info:', {
+        isBuffer: Buffer.isBuffer(encryptedKeyBuffer),
+        length: encryptedKeyBuffer.length,
+        type: typeof encryptedKeyBuffer
+      });
+      
+      // Check if decipher was created successfully
+      if (!decipher) {
+        throw new Error('رمزگشا ایجاد نشد');
+      }
+      
+      // Use step-by-step decryption with proper PKCS#11 handling
+      console.log('🔧 استفاده از رمزگشایی گام به گام PKCS#11...');
+      
+      // Use the simpler once method for RSA decryption
+      let decryptedData;
+      try {
+        // Make sure we have a proper buffer
+        const inputBuffer = Buffer.isBuffer(encryptedKeyBuffer) 
+          ? encryptedKeyBuffer 
+          : Buffer.from(encryptedKeyBuffer);
+        
+        console.log('🔧 شروع رمزگشایی با روش once...');
+        
+        // Use once method with output buffer
+        const outputBuffer = Buffer.alloc(256); // Allocate buffer for output
+        decryptedData = decipher.once(inputBuffer, outputBuffer);
+        
+      } catch (decipherError) {
+        console.log('🔄 خطا در decipher.once:', decipherError.message);
+        
+        // If there's an active operation or the mechanism is invalid, 
+        // we need to properly handle this
+        throw new Error(`رمزگشایی ناموفق: ${decipherError.message}`);
+      }
+      
+      aesKey = Buffer.from(decryptedData);
+      console.log('✅ رمزگشایی RSA موفق، اندازه کلید AES:', aesKey.length);
+      
+    } catch (rsaError) {
+      console.error('❌ خطا در رمزگشایی RSA:', rsaError.message);
+      console.error('Stack:', rsaError.stack);
+      throw new Error(`رمزگشایی RSA ناموفق: ${rsaError.message}`);
+    }
 
     // Decrypt image data with AES
     const crypto = await import('crypto');
